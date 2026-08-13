@@ -3,7 +3,7 @@
 **Status:** Draft / not assigned an official extension type  
 **Provisional extension type:** `0x0003` (placeholder until registered in the SV2 extension registry)  
 **Protocols involved:** Template Distribution Protocol (TDP). This extension **defines new messages** that travel on the TDP connection; it does not reuse Mining Protocol message types.  
-**Depends on:** [Extensions Negotiation (`0x0001`)](https://github.com/stratum-mining/sv2-spec/blob/main/extensions/0x0001-extensions-negotiation.md)
+**Depends on:** [Extensions Negotiation (`0x0001`)](https://github.com/stratum-mining/sv2-spec/blob/main/extensions/0x0001-extensions-negotiation.md). TDP does not implement this today; see [issue-tdp-extensions-negotiation.md](./issue-tdp-extensions-negotiation.md).
 
 Terms like "MUST," "MUST NOT," "REQUIRED," "SHOULD," and "MAY" follow [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
