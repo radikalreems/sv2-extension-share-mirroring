@@ -55,28 +55,18 @@ Under stock SV2:
 
 A Template Provider therefore cannot, from Mining share traffic alone, prove which of **their** templates produced a given share: `job_id` and `template_id` live in different namespaces and are not linked by the base protocols.
 
-### 1.3 Why new messages (not reused Mining types)
-
-`NewExtendedMiningJob` and `SubmitSharesExtended` are core **Mining Protocol** messages: `extension_type = 0x0000`, `channel_msg = 1`, defined Server→Client and Client→Server respectively on a Mining connection.
-
-TDP has no channels, and the spec requires the `channel_msg` bit to be unset on that protocol. Core protocols may only grow via TLV on *existing* messages of that protocol. Reusing Mining frames on TDP would therefore be illegal even if the 8-bit `msg_type` values do not collide with TDP’s `0x70–0x76` range.
-
-This extension instead follows the same pattern as [Extensions Negotiation (`0x0001`)](https://github.com/stratum-mining/sv2-spec/blob/main/extensions/0x0001-extensions-negotiation.md): it **introduces new messages**. The frame header `extension_type` is `0x0003`; `channel_msg` is unset; the 8-bit `msg_type` values are local to this extension (they MAY overlap core `msg_type` bytes; the pair `(extension_type, msg_type)` identifies the message). See SV2 spec §3.4.1 example 4.
-
-`template_id` is a native field on these messages. A TLV is not required.
-
 ---
 
 ## 2. Extension overview
-
-### 2.1 Summary of normative behavior
 
 When this extension is successfully negotiated on the **JDC ↔ Template Provider TDP connection**:
 
 1. The JDC MUST, for every TP `NewTemplate` from which it is mining work that it also submits toward a Pool, send the TP a `NewAssociatedMiningJob` (§4) on that TDP connection.
 2. The JDC MUST, for every `SubmitSharesExtended` that it submits (or accepts for submission) to the Pool for that work, send the TP a `SubmitSharesAssociated` (§5) on that TDP connection. The TP maps each share to a template via `template_id`.
 
-### 2.2 Provisional identifiers
+`template_id` is a native field on these messages. A TLV is not required.
+
+### 2.1 Provisional identifiers
 
 | Item | Value | Notes |
 |------|-------|-------|
@@ -84,9 +74,7 @@ When this extension is successfully negotiated on the **JDC ↔ Template Provide
 | `NewAssociatedMiningJob` `msg_type` | `0x00` | Local to `extension_type = 0x0003` |
 | `SubmitSharesAssociated` `msg_type` | `0x01` | Local to `extension_type = 0x0003` |
 
----
-
-## 3. Message types
+### 2.2 Message types
 
 All messages defined by this extension MUST have `extension_type = 0x0003` in the frame header (the identifier of the extension that defined their non-TLV structure). The `channel_msg` bit MUST be unset. These messages are sent only on a TDP connection that has successfully negotiated this extension.
 
@@ -95,7 +83,32 @@ All messages defined by this extension MUST have `extension_type = 0x0003` in th
 | 0x00 | 0 | NewAssociatedMiningJob | JDC → Template Provider |
 | 0x01 | 0 | SubmitSharesAssociated | JDC → Template Provider |
 
+The 8-bit `msg_type` values are local to this extension. They MAY overlap core `msg_type` bytes; the pair `(extension_type, msg_type)` identifies the message. See SV2 spec §3.4.1 example 4.
+
 Peers that did not negotiate this extension MUST NOT send these messages. A peer that receives an unknown `extension_type` with `channel_msg` unset MUST ignore the frame (SV2 spec §3.4.1).
+
+### 2.3 Relation to Mining Protocol messages
+
+`NewAssociatedMiningJob` and `SubmitSharesAssociated` are **not** `NewExtendedMiningJob` and `SubmitSharesExtended`. Those are core **Mining Protocol** messages: `extension_type = 0x0000`, `channel_msg = 1`, defined Server→Client and Client→Server respectively on a Mining connection.
+
+TDP has no channels, and the spec requires the `channel_msg` bit to be unset on that protocol. Core protocols may only grow via TLV on *existing* messages of that protocol. Reusing Mining frames on TDP would therefore be illegal even if the 8-bit `msg_type` values do not collide with TDP’s `0x70–0x76` range.
+
+This extension instead follows the same pattern as [Extensions Negotiation (`0x0001`)](https://github.com/stratum-mining/sv2-spec/blob/main/extensions/0x0001-extensions-negotiation.md): it **introduces new messages**. Downstream Mining Devices still receive ordinary `NewExtendedMiningJob` / `NewMiningJob` on the Mining Protocol. The Pool still receives ordinary `SubmitSharesExtended` on the Mining Protocol.
+
+---
+
+## 3. Negotiation
+
+Negotiation uses extension `0x0001` (Extensions Negotiation) on the **TDP** connection between the JDC (client) and the Template Provider (server).
+
+1. `SetupConnection` / `SetupConnection.Success` for Template Distribution.
+2. Client sends `RequestExtensions` including provisional `0x0003`.
+3. Server responds `RequestExtensions.Success` (supported) or `RequestExtensions.Error`.
+4. Client sends TDP `CoinbaseOutputConstraints` (stock TDP; after negotiation so that `RequestExtensions` remains the first protocol-specific message, per `0x0001`).
+
+Only after Success may the JDC send `NewAssociatedMiningJob` or `SubmitSharesAssociated` on that TDP link.
+
+Mining Devices and the Pool connection do **not** need this extension for the TP audit path to work.
 
 ---
 
@@ -103,13 +116,13 @@ Peers that did not negotiate this extension MUST NOT send these messages. A peer
 
 Sent on the TDP connection. Informs the Template Provider of the mining-job parameters the JDC is using for work derived from one of the TP’s templates, so later `SubmitSharesAssociated` proofs can be interpreted.
 
-This message is **not** `NewExtendedMiningJob`. Downstream Mining Devices still receive ordinary `NewExtendedMiningJob` / `NewMiningJob` on the Mining Protocol. The JDC SHOULD send one `NewAssociatedMiningJob` per template it is mining, not one copy per downstream channel.
+The JDC SHOULD send one `NewAssociatedMiningJob` per template it is mining, not one copy per downstream channel.
 
 ### 4.1 Fields
 
 | Field Name | Data Type | Description |
 |------------|-----------|-------------|
-| template_id | U64 | The `template_id` from the TP’s `NewTemplate` that this job was built from. MUST refer to a `NewTemplate` previously sent on this TDP session (reconnect rules are TBD; see §8). |
+| template_id | U64 | The `template_id` from the TP’s `NewTemplate` that this job was built from. MUST refer to a `NewTemplate` previously sent on this TDP session (reconnect rules are TBD; see §7). |
 | job_id | U32 | The `job_id` the JDC uses on pool-bound `SubmitSharesExtended` for this work. Informational; TP MUST key state by `template_id`, not by `job_id` alone. |
 | min_ntime | OPTION[U32] | Same meaning as `NewExtendedMiningJob.min_ntime`: empty means a future job awaiting TDP `SetNewPrevHash` for this `template_id`. |
 | version | U32 | Header version used for this job (BIP323 bits as in Mining Protocol). |
@@ -124,7 +137,7 @@ Coinbase reconstruction for a later share is:
 coinbase = coinbase_tx_prefix + extranonce_prefix + extranonce + coinbase_tx_suffix
 ```
 
-`extranonce_prefix` is **not** in this message (it is a Mining-channel property). How the TP obtains it is an open issue (§8.3). Implementations MUST NOT assume prefix length is zero.
+`extranonce_prefix` is **not** in this message (it is a Mining-channel property). How the TP obtains it is an open issue (§7.3). Implementations MUST NOT assume prefix length is zero.
 
 ### 4.2 When to send
 
@@ -157,7 +170,7 @@ Template Provider stores job parameters under `template_id 42`.
 
 For every `SubmitSharesExtended` the JDC submits to the Pool on work that was associated under §4, the JDC MUST also send a `SubmitSharesAssociated` to the TP on the TDP connection, in real time (or with bounded delay agreed operationally).
 
-This message is **not** `SubmitSharesExtended`. The Pool still receives ordinary `SubmitSharesExtended` on the Mining Protocol. `SubmitSharesAssociated` omits Mining `channel_id` and `sequence_number` (those are pool accounting). It carries `template_id` so the TP does not have to join through Mining `job_id`.
+`SubmitSharesAssociated` omits Mining `channel_id` and `sequence_number` (those are pool accounting). It carries `template_id` so the TP does not have to join through Mining `job_id`.
 
 ### 5.2 Fields
 
@@ -172,7 +185,7 @@ This message is **not** `SubmitSharesExtended`. The Pool still receives ordinary
 
 ### 5.3 What “every” means
 
-“Every share submitted to the Pool” means every share the JDC treats as a pool submission for that work—including shares that the Pool later rejects—**unless** both parties explicitly negotiate a filter (see §8 Open issues).
+“Every share submitted to the Pool” means every share the JDC treats as a pool submission for that work—including shares that the Pool later rejects—**unless** both parties explicitly negotiate a filter (see §7 Open issues).
 
 Default in this draft: **full pool-bound resolution** mirrored to the Template Provider (maximizes auditability; higher bandwidth).
 
@@ -185,26 +198,11 @@ JDC → Template Provider:       SubmitSharesAssociated { template_id=42, job_id
                                frame: extension_type=0x0003, msg_type=0x01, channel_msg=0
 ```
 
-Template Provider: `template_id=42` → job parameters from §4 → verify PoW (verification completeness is §8.3).
+Template Provider: `template_id=42` → job parameters from §4 → verify PoW (verification completeness is §7.3).
 
 ---
 
-## 6. Negotiation
-
-Negotiation uses extension `0x0001` (Extensions Negotiation) on the **TDP** connection between the JDC (client) and the Template Provider (server).
-
-1. `SetupConnection` / `SetupConnection.Success` for Template Distribution.
-2. Client sends `RequestExtensions` including provisional `0x0003`.
-3. Server responds `RequestExtensions.Success` (supported) or `RequestExtensions.Error`.
-4. Client sends TDP `CoinbaseOutputConstraints` (stock TDP; after negotiation so that `RequestExtensions` remains the first protocol-specific message, per `0x0001`).
-
-Only after Success may the JDC send `NewAssociatedMiningJob` or `SubmitSharesAssociated` on that TDP link.
-
-Mining Devices and the Pool connection do **not** need this extension for the TP audit path to work.
-
----
-
-## 7. End-to-end flow
+## 6. End-to-end flow
 
 ```text
 1. JDC ↔ Template Provider: TDP SetupConnection
@@ -232,11 +230,11 @@ Mining Devices and the Pool connection do **not** need this extension for the TP
 
 ---
 
-## 8. Open issues / future knobs
+## 7. Open issues / future knobs
 
 These are intentionally **not** normative in this draft; they are the natural next design choices.
 
-### 8.1 Dual resolution (pool fine / TP coarse)
+### 7.1 Dual resolution (pool fine / TP coarse)
 
 Desire from related discussion: Pool keeps an easy `SetTarget` (high share rate); Template Provider only needs a rough hashrate meter.
 
@@ -246,10 +244,10 @@ Possible additive rules (future):
 - JDC only sends `SubmitSharesAssociated` for shares that also meet the attestation target; or
 - JDC mirrors all shares but the TP samples locally.
 
-### 8.2 Downstream vs pool job ids
+### 7.2 Downstream vs pool job ids
 
 JDC typically uses different `job_id` / `channel_id` values toward miners vs toward the Pool. This draft keys TP state by `template_id` and defines `job_id` on these messages as the **pool-bound** id. Downstream ids never appear on TDP.
 
-### 8.3 Share verification completeness
+### 7.3 Share verification completeness
 
-`NewAssociatedMiningJob` does not carry `extranonce_prefix` / `extranonce_size`. Without those (and without an attestation target, §8.1), the TP cannot reconstruct the coinbase or check share difficulty. Likely next fields on `NewAssociatedMiningJob`: `extranonce_prefix` (B0_32) and `extranonce_size` (U16), plus a `U256` attestation target either there or in a TP→JDC message.
+`NewAssociatedMiningJob` does not carry `extranonce_prefix` / `extranonce_size`. Without those (and without an attestation target, §7.1), the TP cannot reconstruct the coinbase or check share difficulty. Likely next fields on `NewAssociatedMiningJob`: `extranonce_prefix` (B0_32) and `extranonce_size` (U16), plus a `U256` attestation target either there or in a TP→JDC message.
