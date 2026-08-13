@@ -1,4 +1,4 @@
-# Stratum V2 Extension (Draft): Template–Job Association and Share Mirroring
+# Stratum V2 Extension (Draft): Share Mirroring to the Template Provider
 
 **Status:** Draft / not assigned an official extension type  
 **Provisional extension type:** `0x0003` (placeholder until registered in the SV2 extension registry)  
