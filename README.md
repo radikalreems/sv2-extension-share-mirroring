@@ -22,12 +22,14 @@ Terms like "MUST," "MUST NOT," "REQUIRED," "SHOULD," and "MAY" follow [RFC 2119]
 
 This document describes a Stratum V2 **extension** that lets a **Template Provider (TP)** audit that their templates are actually being mined, in real time, without changing core SV2 Mining or Template Distribution message layouts for devices that do not opt in.
 
-The extension does two things on an established **Template Distribution Protocol (TDP)** connection between the TP and a **Job Declarator Client (JDC)**:
+This extension **defines two new messages**, `NewAssociatedMiningJob` and `SubmitSharesAssociated`. They travel on the **Template Distribution Protocol (TDP)** connection between the TP and a **Job Declarator Client (JDC)**. They are **not** Mining Protocol messages and MUST NOT be sent on a Mining connection.
+
+On that TDP connection the extension does two things:
 
 1. **Associate jobs with templates** — When the JDC begins mining a job derived from a TP template, it sends a `NewAssociatedMiningJob` message on TDP. That message carries the original `template_id` plus the job parameters needed to interpret later shares.
 2. **Mirror share proofs** — For every `SubmitSharesExtended` the JDC submits toward a Pool, it also sends a `SubmitSharesAssociated` message to the TP on the same TDP connection. That message carries `template_id` and the proof fields.
 
-Mining Devices and Pools continue to receive ordinary Mining Protocol job notifications (`NewExtendedMiningJob`, `SubmitSharesExtended`, etc.). Core SV2 behavior for those devices is unchanged. This extension’s messages are **not** Mining Protocol messages and MUST NOT be sent on a Mining connection.
+Mining Devices and Pools continue to receive ordinary Mining Protocol job notifications (`NewExtendedMiningJob`, `SubmitSharesExtended`, etc.). Core SV2 behavior for those devices is unchanged.
 
 ---
 
