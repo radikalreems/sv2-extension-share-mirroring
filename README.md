@@ -7,15 +7,6 @@
 
 Terms like "MUST," "MUST NOT," "REQUIRED," "SHOULD," and "MAY" follow [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
-**Roles in this document**
-
-| Role | SV2 / SRI name | In this extension |
-|------|----------------|-------------------|
-| Template supplier (TDP server) | **Template Provider (TP)** | Sends `NewTemplate`; receives job association + mirrored shares |
-| Mid-tier (TDP client, MP aggregator) | **Job Declarator Client (JDC)** | Builds jobs from TP templates, serves Mining Devices, submits shares to the Pool, mirrors audit traffic to the TP |
-| Upstream payout endpoint | **Pool** | Receives `SubmitSharesExtended` for accounting |
-| Downstream hashers | **Mining Device** | Receive jobs / submit shares on Mining Protocol |
-
 ---
 
 ## 0. Abstract
@@ -84,14 +75,6 @@ All messages defined by this extension MUST have `extension_type = 0x0003` in th
 The 8-bit `msg_type` values are local to this extension. They MAY overlap core `msg_type` bytes; the pair `(extension_type, msg_type)` identifies the message. See SV2 spec §3.4.1 example 4.
 
 Peers that did not negotiate this extension MUST NOT send these messages. A peer that receives an unknown `extension_type` with `channel_msg` unset MUST ignore the frame (SV2 spec §3.4.1).
-
-### 3.3 Relation to Mining Protocol messages
-
-`NewAssociatedMiningJob` and `SubmitSharesAssociated` are **not** `NewExtendedMiningJob` and `SubmitSharesExtended`. Those are core **Mining Protocol** messages: `extension_type = 0x0000`, `channel_msg = 1`, defined Server→Client and Client→Server respectively on a Mining connection.
-
-TDP has no channels, and the spec requires the `channel_msg` bit to be unset on that protocol. Core protocols may only grow via TLV on *existing* messages of that protocol. Reusing Mining frames on TDP would therefore be illegal even if the 8-bit `msg_type` values do not collide with TDP’s `0x70–0x76` range.
-
-This extension instead follows the same pattern as [Extensions Negotiation (`0x0001`)](https://github.com/stratum-mining/sv2-spec/blob/main/extensions/0x0001-extensions-negotiation.md): it **introduces new messages**. Downstream Mining Devices still receive ordinary `NewExtendedMiningJob` / `NewMiningJob` on the Mining Protocol. The Pool still receives ordinary `SubmitSharesExtended` on the Mining Protocol.
 
 ---
 
