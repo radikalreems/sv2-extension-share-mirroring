@@ -43,11 +43,9 @@ Under stock SV2, the Template Provider identifies work by `template_id` on Templ
 
 **`NewAssociatedMiningJob`** closes that gap. When the JDC begins mining a job derived from a TP template, it sends this message on the TDP connection. The message carries the original `template_id` plus everything the TP needs to interpret **and independently verify** later shares: the pool-bound `job_id`, merkle path, coinbase prefix and suffix, the pool-bound `extranonce_prefix` / `extranonce_size`, and the pool-bound `share_target`. The TP stores that state keyed by `template_id`. With it, every share record is a self-contained proof-of-work: the TP reconstructs the coinbase, derives the merkle root, assembles the header, and checks the hash against the target (§5.4). No trust in the JDC's counting is required.
 
-The share id in this extension is the **share hash**: the double-SHA256 of the share's assembled 80-byte block header — the value the JDC already computes when validating the share, and the value the TP computes in §5.4 step 5 when verifying it. It is unique by construction (two shares with the same hash are the same share; duplicates are rejected before ever reaching the Pool), it survives JDC restarts and pool fallbacks with no counters or session state, and it is **self-authenticating**: the TP does not take the id on faith, it recomputes it from the record. Mining-protocol `sequence_number`s (pool accounting) do not appear on TDP at all.
+**`SubmitSharesAssociated`** is the live share-mirroring path (full mode only). It carries `template_id` and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). It carries no explicit id: the TP derives the share hash (§6.2) while verifying the record.
 
-**`SubmitSharesAssociated`** is the live share-mirroring path (full mode only). It carries `template_id` and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). It carries no explicit id: the TP derives the share hash while verifying the record.
-
-**Retrieval** is the batch path (both modes). The TP asks for the hashes of the most recent shares in the window, takes the set difference against the hashes of shares it already holds, and requests the missing records by hash. The JDC answers from its 10,000-share window. The pulled hash list — not any counter arithmetic — is the authoritative statement of what the window contains.
+**Retrieval** is the batch path (both modes). The TP sends `RequestRecentShareHashes`; the JDC answers with `ShareHashes`, listing the share hashes of the most recent shares in its 10,000-share window. The TP takes the set difference against the shares it already holds, requests the missing records with `RequestShares`, and the JDC returns them in `Shares`.
 
 ---
 
