@@ -18,8 +18,8 @@ This extension defines new messages that travel on the **Template Distribution P
 On that TDP connection the extension does three things:
 
 1. **Associate jobs with templates** — When the JDC begins mining a job derived from a TP template, it sends a `NewAssociatedMiningJob` message on TDP. That message carries the original `template_id` plus the job parameters needed to interpret **and verify** later shares: coinbase prefix/suffix, merkle path, the pool-bound extranonce prefix and size, and the share target.
-2. **Retain pool-bound shares** — The JDC keeps a rolling window of the last 10,000 shares it submitted toward the Pool, keyed by the pool-bound `sequence_number`.
-3. **Let the TP retrieve those shares** — The TP pulls recent shares in batch and, if any `sequence_number`s are missing, asks for them by id. In **full** audit mode the JDC also mirrors each pool-bound share to the TP as it is submitted.
+2. **Retain pool-bound shares** — The JDC keeps a rolling window of the last 10,000 shares it submitted toward the Pool, keyed by each share's **header hash** (the same double-SHA256 the JDC already computes to validate the share).
+3. **Let the TP retrieve those shares** — The TP periodically pulls the hashes of the most recent shares in the window, checks that list against the shares it already holds, and requests any it lacks by hash. In **full** audit mode the JDC also mirrors each pool-bound share to the TP as it is submitted.
 
 Mining Devices and Pools continue to receive ordinary Mining Protocol job notifications (`NewExtendedMiningJob`, `SubmitSharesExtended`, etc.). Core SV2 behavior for those devices is unchanged.
 
@@ -43,11 +43,11 @@ Under stock SV2, the Template Provider identifies work by `template_id` on Templ
 
 **`NewAssociatedMiningJob`** closes that gap. When the JDC begins mining a job derived from a TP template, it sends this message on the TDP connection. The message carries the original `template_id` plus everything the TP needs to interpret **and independently verify** later shares: the pool-bound `job_id`, merkle path, coinbase prefix and suffix, the pool-bound `extranonce_prefix` / `extranonce_size`, and the pool-bound `share_target`. The TP stores that state keyed by `template_id`. With it, every share record is a self-contained proof-of-work: the TP reconstructs the coinbase, derives the merkle root, assembles the header, and checks the hash against the target (§5.4). No trust in the JDC's counting is required.
 
-The JDC already assigns a pool-bound `sequence_number` on each `SubmitSharesExtended` it sends to the Pool. That id is the handle for this extension’s share window and retrieval.
+The share id in this extension is the **share hash**: the double-SHA256 of the share's assembled 80-byte block header — the value the JDC already computes when validating the share, and the value the TP computes in §5.4 step 5 when verifying it. It is unique by construction (two shares with the same hash are the same share; duplicates are rejected before ever reaching the Pool), it survives JDC restarts and pool fallbacks with no counters or session state, and it is **self-authenticating**: the TP does not take the id on faith, it recomputes it from the record. Mining-protocol `sequence_number`s (pool accounting) do not appear on TDP at all.
 
-**`SubmitSharesAssociated`** is the live share-mirroring path (full mode only). It carries `template_id`, the pool-bound `sequence_number`, and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). The TP maps each share to a template via `template_id`.
+**`SubmitSharesAssociated`** is the live share-mirroring path (full mode only). It carries `template_id` and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). It carries no explicit id: the TP derives the share hash while verifying the record.
 
-**Retrieval** is the batch path (both modes). The TP asks for the most recent shares, compares `sequence_number`s to what it already has, and requests any gaps by id. The JDC answers from its 10,000-share window.
+**Retrieval** is the batch path (both modes). The TP asks for the hashes of the most recent shares in the window, takes the set difference against the hashes of shares it already holds, and requests the missing records by hash. The JDC answers from its 10,000-share window. The pulled hash list — not any counter arithmetic — is the authoritative statement of what the window contains.
 
 ---
 
@@ -56,11 +56,11 @@ The JDC already assigns a pool-bound `sequence_number` on each `SubmitSharesExte
 When this extension is successfully negotiated on the **JDC ↔ Template Provider TDP connection**:
 
 1. The JDC MUST, for every TP `NewTemplate` from which it is mining work that it also submits toward a Pool, send the TP a `NewAssociatedMiningJob` (§5) on that TDP connection.
-2. The JDC MUST retain the last 10,000 pool-bound shares and their pool `sequence_number`s (§6).
+2. The JDC MUST retain the last 10,000 pool-bound shares, keyed by share hash (§6).
 3. The Template Provider MUST send `SetShareMirroringMode` (§4.1) selecting **lazy** or **full**.
 4. In **full** mode, the JDC MUST, for every `SubmitSharesExtended` that it submits (or accepts for submission) to the Pool for that work, send the TP a `SubmitSharesAssociated` (§7) on that TDP connection.
 5. In **lazy** mode, the JDC MUST NOT send unsolicited `SubmitSharesAssociated`. The TP obtains shares only via §8.
-6. In **both** modes, the TP SHOULD periodically request the last 5,000 shares (§8) and MUST be able to request missing `sequence_number`s by id.
+6. In **both** modes, the TP SHOULD periodically request the hashes of the last 5,000 shares (§8), check that list against the shares it holds, and request any it lacks by hash.
 
 `template_id` is a native field on the share and job messages. A TLV is not required.
 
@@ -72,9 +72,10 @@ When this extension is successfully negotiated on the **JDC ↔ Template Provide
 | `NewAssociatedMiningJob` `msg_type` | `0x00` | Local to `extension_type = 0x0003` |
 | `SubmitSharesAssociated` `msg_type` | `0x01` | Local to `extension_type = 0x0003` |
 | `SetShareMirroringMode` `msg_type` | `0x02` | Local to `extension_type = 0x0003` |
-| `RequestRecentShares` `msg_type` | `0x03` | Local to `extension_type = 0x0003` |
-| `RequestShares` `msg_type` | `0x04` | Local to `extension_type = 0x0003` |
-| `Shares` `msg_type` | `0x05` | Local to `extension_type = 0x0003` |
+| `RequestRecentShareHashes` `msg_type` | `0x03` | Local to `extension_type = 0x0003` |
+| `ShareHashes` `msg_type` | `0x04` | Local to `extension_type = 0x0003` |
+| `RequestShares` `msg_type` | `0x05` | Local to `extension_type = 0x0003` |
+| `Shares` `msg_type` | `0x06` | Local to `extension_type = 0x0003` |
 
 ### 3.2 Message types
 
@@ -85,15 +86,16 @@ All messages defined by this extension MUST have `extension_type = 0x0003` in th
 | 0x00 | 0 | NewAssociatedMiningJob | JDC → Template Provider |
 | 0x01 | 0 | SubmitSharesAssociated | JDC → Template Provider |
 | 0x02 | 0 | SetShareMirroringMode | Template Provider → JDC |
-| 0x03 | 0 | RequestRecentShares | Template Provider → JDC |
-| 0x04 | 0 | RequestShares | Template Provider → JDC |
-| 0x05 | 0 | Shares | JDC → Template Provider |
+| 0x03 | 0 | RequestRecentShareHashes | Template Provider → JDC |
+| 0x04 | 0 | ShareHashes | JDC → Template Provider |
+| 0x05 | 0 | RequestShares | Template Provider → JDC |
+| 0x06 | 0 | Shares | JDC → Template Provider |
 
 The 8-bit `msg_type` values are local to this extension. They MAY overlap core `msg_type` bytes; the pair `(extension_type, msg_type)` identifies the message. See SV2 spec §3.4.1 example 4.
 
 Peers that did not negotiate this extension MUST NOT send these messages. A peer that receives an unknown `extension_type` with `channel_msg` unset MUST ignore the frame (SV2 spec §3.4.1).
 
-There is no Success/Error on `NewAssociatedMiningJob` or `SubmitSharesAssociated`. Retrieval uses `request_id` on `RequestRecentShares` / `RequestShares` / `Shares` only.
+There is no Success/Error on `NewAssociatedMiningJob` or `SubmitSharesAssociated`. Retrieval pairs requests and replies by `request_id` (`RequestRecentShareHashes` → `ShareHashes`, `RequestShares` → `Shares`).
 
 ### 3.3 Audit modes
 
@@ -101,8 +103,8 @@ There is no Success/Error on `NewAssociatedMiningJob` or `SubmitSharesAssociated
 
 | `mode` | Name | Live `SubmitSharesAssociated` | Batch retrieval (§8) |
 |--------|------|-------------------------------|----------------------|
-| `0x00` | **Lazy** | MUST NOT send | MUST: TP pulls last 5,000; then asks for any missing ids |
-| `0x01` | **Full** | MUST send every pool-bound share | MUST: same pull as a reconciliation check |
+| `0x00` | **Lazy** | MUST NOT send | MUST: TP pulls the last 5,000 hashes, then fetches every record it lacks |
+| `0x01` | **Full** | MUST send every pool-bound share | MUST: same hash pull as a reconciliation check on the live stream |
 
 Lazy is for a TP that only needs periodic proof. Full is for a TP that wants every pool-bound share as it happens, with the pull as a safety net for drops or a late join.
 
@@ -174,7 +176,7 @@ If any field of the association changes for the same `template_id`, the JDC MUST
 - a Pool `SetExtranoncePrefix` on the pool-bound channel (changes `extranonce_prefix` even though the coinbase prefix/suffix bytes do not change);
 - a Pool `SetTarget` on the pool-bound channel (changes `share_target`).
 
-Shares are verified against the association in effect when the JDC submitted them; the TP SHOULD tolerate a small reordering window around a replacement (a share validated under the previous target/prefix may arrive just after the replacement message).
+Shares are verified against the association in effect when the JDC submitted them; the TP SHOULD tolerate a small reordering window around a replacement (a share validated under the previous target/prefix may arrive just after the replacement message). This applies to **identity** as well as validity: the share hash (§6.2) is derived from the record's fields together with the association's `coinbase_tx_prefix` / `extranonce_prefix` / `coinbase_tx_suffix`, so a TP that fails to match or verify a share against the latest association SHOULD retry against the immediately preceding one before treating it as invalid.
 
 ### 5.3 Example
 
@@ -204,6 +206,8 @@ Every share the TP receives for a `template_id` — live (§7) or pulled (§8) �
 4. **Header.** Assemble the 80-byte block header from: `version` (share), `prev_hash` and `nBits` from the latest TDP `SetNewPrevHash` for this `template_id`, the computed merkle root, `ntime` (share), `nonce` (share). If `version_rolling_allowed`, the share's `version` MAY differ from the association's within the BIP320 rolling mask, same rule as Mining.
 5. **Target check.** The share is valid iff the double-SHA256 header hash, interpreted as in the Mining Protocol target comparison, is ≤ `share_target`.
 
+The header hash computed in step 5 is also the share's **identifier** (§6.2): verification and identification are the same computation.
+
 Shares failing any step MUST NOT be counted as evidence of work. If the header hash is also ≤ the block target from `SetNewPrevHash`, the TP should additionally expect a stock TDP `SubmitSolution` for this template.
 
 **Why a self-reported target is sound.** `share_target` comes from the JDC, but the JDC cannot inflate the work it proves by misreporting it. Fabricating a record that passes step 5 costs on the order of `2^256 / share_target` hash operations, so each verified share attests the difficulty implied by the reported target — regardless of what the pool's actual target was. Reporting an *easier* target than the pool's only lowers the work per share the JDC can claim. The TP's attested-hashrate floor is the sum of `difficulty(share_target)` over verified shares per unit of time, and honest share rates at a given target are also externally sanity-checkable (a pool-tuned target yields on the order of a few shares per minute per upstream channel).
@@ -212,23 +216,29 @@ Shares failing any step MUST NOT be counted as evidence of work. If the header h
 
 ## 6. JDC share window
 
-The JDC MUST keep a rolling window of the last **10,000** shares it submitted (or accepted for submission) toward the Pool on the pool-bound Mining channel used for this TDP work, together with each share’s pool-bound `sequence_number`.
+The JDC MUST keep a rolling window of the last **10,000** shares it submitted (or accepted for submission) toward the Pool on the pool-bound Mining channel used for this TDP work, keyed by each share's **share hash** (§6.2).
 
-This window is **pool-bound only**. Downstream miner shares that do not meet the pool target, and are not forwarded, MUST NOT be stored. Downstream `sequence_number`s MUST NOT be used as keys.
+This window is **pool-bound only**. Downstream miner shares that do not meet the pool target, and are not forwarded, MUST NOT be stored. Mining-protocol `sequence_number`s (downstream or pool-bound) are pool accounting and are not used by this extension.
 
 This draft assumes a single pool-bound Mining channel for that JDC (the usual JDC shape). Multiple upstream channels are TBD (§10.4).
 
 ### 6.1 What is stored
 
-For each retained share the JDC MUST be able to produce a `ShareRecord` (§8.4): `sequence_number`, `template_id`, `job_id`, `nonce`, `ntime`, `version`, `extranonce`.
+For each retained share the JDC MUST be able to produce its share hash and a `ShareRecord` (§8.5): `template_id`, `job_id`, `nonce`, `ntime`, `version`, `extranonce`.
 
-The JDC SHOULD append to the window when (or immediately after) it forwards the share to the Pool, not on the miner-submit hot path. Evict the oldest entry when the window exceeds 10,000.
+The JDC SHOULD append to the window when (or immediately after) it forwards the share to the Pool, not on the miner-submit hot path. The share hash requires no extra computation: the JDC already produces it when validating the share against the pool target. Evict the oldest entry when the window exceeds 10,000.
 
-At typical pool vardiff (~6 shares/minute on the upstream channel) 10,000 shares is on the order of **28 hours** and about **0.4–0.5 MB** of share payloads.
+At typical pool vardiff (~6 shares/minute on the upstream channel) 10,000 shares is on the order of **28 hours** and about **0.8 MB** including the 32-byte hash keys.
 
-### 6.2 Identifier
+### 6.2 Identifier: the share hash
 
-`sequence_number` is the U32 the JDC puts on the pool-bound `SubmitSharesExtended`. It is the only share id this extension uses. The Template Provider treats it as a monotonically increasing id on that pool channel (wrap-around is possible; see §10.3).
+The share id is the **share hash**: the double-SHA256 of the share's assembled 80-byte block header (the value computed in §5.4 steps 2–5), encoded as U256 with the same convention as `SetNewPrevHash.prev_hash`.
+
+Properties this extension relies on:
+
+- **Unique by construction.** Two shares with the same hash are the same share. Duplicate submissions are rejected by share validation before reaching the Pool, so the window cannot contain two entries with the same key. Uniqueness holds across JDC restarts, pool fallbacks, and pool changes with no counters, epochs, or session state.
+- **Self-authenticating.** The TP never takes an id on faith: for every record it receives, it recomputes the hash during verification (§5.4) and uses that computed value as the key. A record and its id cannot disagree without the record failing verification.
+- **Opaque.** The TP MUST NOT infer anything from hash values (ordering, recency, adjacency). Missing shares are detected only by reconciling against the hash lists the JDC reports (§8): a share is missing if and only if its hash appears in a `ShareHashes` reply and the TP does not hold a verified record for it.
 
 ---
 
@@ -242,13 +252,12 @@ When `mode = 0x01` (full), for every `SubmitSharesExtended` the JDC submits to t
 
 When `mode = 0x00` (lazy), the JDC MUST NOT send this message. The TP uses §8.
 
-`SubmitSharesAssociated` omits Mining `channel_id` (pool accounting). It carries the pool-bound `sequence_number` so the TP can detect gaps and request them. It carries `template_id` so the TP does not have to join through Mining `job_id`.
+`SubmitSharesAssociated` omits Mining `channel_id` and `sequence_number` (pool accounting) and carries no explicit share id: the TP derives the share hash while verifying the record (§5.4) and stores it under that key, which is how live records later match the hash lists it pulls (§8). It carries `template_id` so the TP does not have to join through Mining `job_id`.
 
 ### 7.2 Fields
 
 | Field Name | Data Type | Description |
 |------------|-----------|-------------|
-| sequence_number | U32 | MUST equal the pool-bound `SubmitSharesExtended.sequence_number` for this share. |
 | template_id | U64 | MUST equal the `template_id` of the `NewAssociatedMiningJob` this share is for. |
 | job_id | U32 | MUST equal `NewAssociatedMiningJob.job_id` for that `template_id` (the pool-bound job id). Informational. |
 | nonce | U32 | Header nonce. |
@@ -266,70 +275,84 @@ Default in full mode: **full pool-bound resolution** mirrored live to the Templa
 
 ```text
 Mining Device → JDC:           SubmitSharesExtended { ... }
-JDC → Pool:                    SubmitSharesExtended { sequence_number=1001, ... }
-JDC → Template Provider:       SubmitSharesAssociated { sequence_number=1001, template_id=42, job_id=7, nonce, ntime, version, extranonce }
+JDC → Pool:                    SubmitSharesExtended { ... }
+JDC stores the share in the window under its share hash H
+JDC → Template Provider:       SubmitSharesAssociated { template_id=42, job_id=7, nonce, ntime, version, extranonce }
                                frame: extension_type=0x0003, msg_type=0x01, channel_msg=0
 ```
 
-Template Provider: `template_id=42` → association from §5 → verify per §5.4. Record `sequence_number=1001`.
+Template Provider: `template_id=42` → association from §5 → verify per §5.4, computing share hash `H` → store the record under `H`.
 
 ---
 
 ## 8. Share retrieval (both modes)
 
-The Template Provider pulls from the JDC window. This is the **only** share path in lazy mode and the **reconciliation** path in full mode.
+The Template Provider reconciles against the JDC window in two steps:
 
-There is no Success/Error. The JDC answers with `Shares` carrying the same `request_id`.
+1. **Pull the hash list.** `RequestRecentShareHashes` asks for the share hashes of the most recent shares still in the window. The reply (`ShareHashes`) is the authoritative statement of what the window holds.
+2. **Set-difference, then fetch.** The TP compares that list against the hashes of shares it already holds (previous fetches and, in full mode, the live stream) and requests every hash it lacks with `RequestShares`.
+
+In lazy mode this is the **only** share path — on each cycle the TP typically fetches all listed records it does not yet have. In full mode it is the **reconciliation** path — the live stream already delivered most records, and the fetch covers only drops.
+
+A share is missing if and only if its hash appears in a `ShareHashes` reply and the TP does not hold a verified record for it (§6.2).
+
+There is no Success/Error. Replies pair with requests by `request_id`.
 
 ### 8.1 Recommended pull
 
 | Knob | Value | Why |
 |------|-------|-----|
 | JDC window | 10,000 shares | Slack if a pull is late |
-| TP request size | 5,000 shares (half the window) | Leaves ~5,000 shares of buffer in the ring |
-| Pull interval | About **half the expected time to fill the 10,000-share window** | At ~6 pool-bound shares/minute that window is ~28 hours, so pull last 5,000 about every **~14 hours** (the time to accumulate 5,000 new shares) |
+| TP request size | 5,000 hashes (half the window) | Leaves ~5,000 shares of buffer in the ring |
+| Pull interval | About **half the expected time to fill the 10,000-share window** | At ~6 pool-bound shares/minute that window is ~28 hours, so pull about every **~14 hours** (the time to accumulate 5,000 new shares) |
 
 The interval is operational, not a protocol timer. The Template Provider SHOULD use the pool channel’s expected share rate when known; **6 shares/minute** is the usual SRI / pool default if it is not.
 
-If the TP waits longer than the remaining 5,000-share slack, the oldest shares fall out of the window and can only be reported as unavailable.
+If the TP waits longer than the remaining 5,000-share slack, the oldest shares fall out of the window before ever appearing in a hash list, and can then only be reported as unavailable.
 
-After each `Shares` reply, the TP MUST compare the returned `sequence_number`s to the set it already has (previous pulls and, in full mode, live `SubmitSharesAssociated`). Any id in the returned range, or in the span since the last successful pull, that the TP does not have MUST be requested with `RequestShares`.
+### 8.2 `RequestRecentShareHashes` (Server → Client)
 
-### 8.2 `RequestRecentShares` (Server → Client)
+Ask for the hashes of the most recent shares still in the window.
 
-Ask for the most recent shares still in the window, newest retained share first in meaning (the JDC MAY return them in any order; the TP sorts by `sequence_number`).
+| Field Name | Data Type | Description |
+|------------|-----------|-------------|
+| request_id | U32 | Echoed in the `ShareHashes` reply. Unique among in-flight requests on this TDP session. |
+| count | U32 | Maximum number of hashes to return. MUST be ≥ 1. MUST NOT exceed 10,000. The Template Provider SHOULD send `5000`. |
+
+The JDC MUST reply with `ShareHashes` for that `request_id`, containing the hashes of the `count` most recently appended shares (all of them if the window holds fewer), in any order. "Most recently appended" is window insertion order — nothing about the hash values themselves.
+
+### 8.3 `ShareHashes` (Client → Server)
+
+| Field Name | Data Type | Description |
+|------------|-----------|-------------|
+| request_id | U32 | MUST equal the `request_id` of the `RequestRecentShareHashes` this answers. |
+| share_hashes | SEQ0_64K[U256] | Share hashes (§6.2) of the most recently appended shares, in any order. MAY be empty (empty window). |
+
+At 32 bytes per hash, 5,000 hashes are about **160 KB**.
+
+### 8.4 `RequestShares` (Server → Client)
+
+Fetch specific shares by hash.
 
 | Field Name | Data Type | Description |
 |------------|-----------|-------------|
 | request_id | U32 | Echoed in the `Shares` reply. Unique among in-flight requests on this TDP session. |
-| count | U32 | Maximum number of shares to return. MUST be ≥ 1. MUST NOT exceed 10,000. The Template Provider SHOULD send `5000`. |
+| share_hashes | SEQ0_64K[U256] | Share hashes to return. MUST NOT be empty. MUST NOT contain more than 10,000 entries. |
 
-The JDC MUST reply with `Shares` for that `request_id`. If the window holds fewer than `count` shares, return all of them. `unavailable_sequence_numbers` MUST be empty (this request does not name ids).
+The JDC MUST reply with `Shares` for that `request_id`. Each requested hash still in the window MUST appear as a record in `shares`. Each requested hash not in the window MUST appear in `unavailable_share_hashes`. The JDC MUST NOT invent shares.
 
-### 8.3 `RequestShares` (Server → Client)
-
-Ask for specific pool-bound `sequence_number`s (gap fill).
+### 8.5 `Shares` (Client → Server)
 
 | Field Name | Data Type | Description |
 |------------|-----------|-------------|
-| request_id | U32 | Echoed in the `Shares` reply. Unique among in-flight requests on this TDP session. |
-| sequence_numbers | SEQ0_64K[U32] | Pool-bound ids to return. MUST NOT be empty. MUST NOT contain more than 10,000 entries. |
-
-The JDC MUST reply with `Shares` for that `request_id`. Each requested id still in the window MUST appear in `shares`. Each requested id not in the window MUST appear in `unavailable_sequence_numbers`. The JDC MUST NOT invent shares.
-
-### 8.4 `Shares` (Client → Server)
-
-| Field Name | Data Type | Description |
-|------------|-----------|-------------|
-| request_id | U32 | MUST equal the `request_id` of the request this answers. |
+| request_id | U32 | MUST equal the `request_id` of the `RequestShares` this answers. |
 | shares | SEQ0_64K[ShareRecord] | Records still available. MAY be empty. |
-| unavailable_sequence_numbers | SEQ0_64K[U32] | Requested ids that have aged out or were never stored. Empty after `RequestRecentShares`. |
+| unavailable_share_hashes | SEQ0_64K[U256] | Requested hashes that have aged out or were never stored. |
 
-`ShareRecord` is the same payload as `SubmitSharesAssociated`:
+`ShareRecord` is the same payload as `SubmitSharesAssociated` — it carries no explicit id:
 
 | Field Name | Data Type | Description |
 |------------|-----------|-------------|
-| sequence_number | U32 | Pool-bound `sequence_number`. |
 | template_id | U64 | Template this share was mined on. |
 | job_id | U32 | Pool-bound job id. Informational. |
 | nonce | U32 | Header nonce. |
@@ -337,30 +360,45 @@ The JDC MUST reply with `Shares` for that `request_id`. Each requested id still 
 | version | U32 | Full nVersion field. |
 | extranonce | B0_32 | The pool-bound `SubmitSharesExtended.extranonce`. MUST be exactly `NewAssociatedMiningJob.extranonce_size` bytes for this `template_id`. |
 
-At ~40–50 bytes per record, 5,000 shares are about **0.2–0.25 MB**.
+The TP identifies each returned record by recomputing its share hash during verification (§5.4). Every record returned for a `RequestShares` MUST hash to one of the requested values; the TP MUST discard (and MUST NOT count) any record that does not.
 
-### 8.5 Example (lazy)
+At ~36–46 bytes per record, a full 5,000-record fetch is about **0.2 MB**.
 
-```text
-TP  → JDC:  RequestRecentShares { request_id=1, count=5000 }
-JDC → TP:   Shares { request_id=1, shares=[… 5000 ShareRecords …], unavailable=[] }
-
-TP notices sequence_number 1842 and 1901 are in the expected span but not in this batch
-    and not from a previous pull.
-
-TP  → JDC:  RequestShares { request_id=2, sequence_numbers=[1842, 1901] }
-JDC → TP:   Shares { request_id=2, shares=[ShareRecord 1842, ShareRecord 1901], unavailable=[] }
-```
-
-If `1901` had already fallen out of the 10,000 window:
+### 8.6 Example (lazy)
 
 ```text
-JDC → TP:   Shares { request_id=2, shares=[ShareRecord 1842], unavailable=[1901] }
+TP  → JDC:  RequestRecentShareHashes { request_id=1, count=5000 }
+JDC → TP:   ShareHashes { request_id=1, share_hashes=[… 5000 hashes …] }
+
+TP diffs the list against its store: 4,970 hashes match records already fetched
+    on a previous cycle; 30 are new.
+
+TP  → JDC:  RequestShares { request_id=2, share_hashes=[… the 30 hashes …] }
+JDC → TP:   Shares { request_id=2, shares=[… 30 ShareRecords …], unavailable=[] }
+
+TP verifies each record (§5.4); each computed hash matches a requested one.
 ```
 
-### 8.6 Example (full)
+If one of the requested hashes had already fallen out of the 10,000 window by fetch time:
 
-Same pull as §8.5, used as a check. Live `SubmitSharesAssociated` already carried most ids. `RequestShares` is only for holes in the live stream.
+```text
+JDC → TP:   Shares { request_id=2, shares=[… 29 ShareRecords …], unavailable=[H_1901] }
+```
+
+### 8.7 Example (full)
+
+Same two steps, used as a check on the live stream:
+
+```text
+TP  → JDC:  RequestRecentShareHashes { request_id=7, count=5000 }
+JDC → TP:   ShareHashes { request_id=7, share_hashes=[… 5000 hashes …] }
+
+TP diffs against the hashes of records received live via SubmitSharesAssociated:
+    two hashes appear in the list but never arrived (dropped frames).
+
+TP  → JDC:  RequestShares { request_id=8, share_hashes=[H_a, H_b] }
+JDC → TP:   Shares { request_id=8, shares=[ShareRecord a, ShareRecord b], unavailable=[] }
+```
 
 ---
 
@@ -382,17 +420,18 @@ Same pull as §8.5, used as a check. Live `SubmitSharesAssociated` already carri
 
 4. Mining Device hashes; on a share that meets the pool target:
    Mining Device → JDC:           SubmitSharesExtended(...)          // stock Mining
-   JDC → Pool:                    SubmitSharesExtended(sequence_number=N, ...)
-   JDC stores ShareRecord N in the 10,000-share window
+   JDC → Pool:                    SubmitSharesExtended(...)
+   JDC stores the ShareRecord in the 10,000-share window under its share hash H
    if full:
-     JDC → Template Provider:     SubmitSharesAssociated(sequence_number=N, template_id=T, ...)
+     JDC → Template Provider:     SubmitSharesAssociated(template_id=T, ...)
 
-5. Periodically (~half the 10k-window time; last 5,000 shares):
-   TP  → JDC:  RequestRecentShares { count=5000 }
-   JDC → TP:   Shares { … }
-   if any sequence_number missing:
-     TP  → JDC:  RequestShares { sequence_numbers=[…] }
-     JDC → TP:   Shares { shares and/or unavailable_sequence_numbers }
+5. Periodically (~half the 10k-window time):
+   TP  → JDC:  RequestRecentShareHashes { count=5000 }
+   JDC → TP:   ShareHashes { share_hashes=[…] }
+   TP diffs the hash list against the shares it holds;
+   for every hash it lacks:
+     TP  → JDC:  RequestShares { share_hashes=[…] }
+     JDC → TP:   Shares { shares and/or unavailable_share_hashes }
 
 6. On network-valid block (unchanged base TDP):
    JDC → Template Provider:       SubmitSolution(template_id=T, ...)
@@ -412,17 +451,17 @@ Desire from related discussion: Pool keeps an easy `SetTarget` (high share rate)
 
 Verification (§5.4) uses the pool's own `share_target`, so this draft is **full pool resolution**. A future knob could let the TP declare a harder **attestation target** (e.g. alongside `SetShareMirroringMode`) and have the JDC store / mirror / return only shares meeting it — fewer, higher-difficulty proofs for the same attested hashrate.
 
-Any such filter must also define how it interacts with gap detection (§8.1): filtered-out shares still consume pool `sequence_number`s, so the TP could no longer treat every missing id as a lost share. That interaction is why this stays a future knob rather than part of this revision. Alternatively, the TP can already downsample locally at zero protocol cost: verify a random subset of pulled records instead of all of them.
+Because reconciliation is a set difference against the JDC-reported hash list (§8), such a filter composes cleanly: filtered-out shares simply never appear in `ShareHashes`, and loss detection over the attested subset still works. The remaining design work is the target-advertisement message and its replacement rules. Alternatively, the TP can already downsample locally at zero protocol cost: verify a random subset of fetched records instead of all of them.
 
 Lazy vs full is about **delivery**, not difficulty. Dual resolution would apply on top of either mode.
 
 ### 10.2 Downstream vs pool job ids
 
-JDC typically uses different `job_id` / `channel_id` values toward miners vs toward the Pool. This draft keys TP state by `template_id` and defines `job_id` on these messages as the **pool-bound** id. Downstream ids never appear on TDP. Share ids are the pool-bound `sequence_number` only.
+JDC typically uses different `job_id` / `channel_id` values toward miners vs toward the Pool. This draft keys TP state by `template_id` and defines `job_id` on these messages as the **pool-bound** id. Downstream ids never appear on TDP. The share id is the share hash (§6.2); Mining `sequence_number`s never appear on TDP.
 
-### 10.3 `sequence_number` wrap and reconnect
+### 10.3 Window persistence and reconnect
 
-U32 wrap-around, JDC restart (sequence factory reset), and TDP reconnect are TBD. A reconnecting TP can `RequestRecentShares` for whatever is still in the window; shares older than 10,000 are gone. Whether the JDC persists the window across process restart is TBD.
+Share-hash ids are unique across restarts and fallbacks by construction (§6.2), so no epoch or counter rules are needed. What remains TBD: whether the JDC persists the window across a process restart (if not, up to 10,000 shares of auditable history are lost with it — including across a pool fallback if the window is owned by connection-scoped state); and TDP reconnect (association state dies with the TDP session, so after reconnect the JDC MUST re-send `NewAssociatedMiningJob` for live templates before further shares, and a reconnecting TP re-pulls whatever is still in the window).
 
 ### 10.4 Several pool-bound channels
 
