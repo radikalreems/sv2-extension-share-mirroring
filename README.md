@@ -39,13 +39,28 @@ Share **resolution** at the TP does not need to match the Pool. The Pool wants a
 
 ## 2. Design
 
+### 2.1 Associating templates with mining jobs
+
 Under stock SV2, the Template Provider identifies work by `template_id` on Template Distribution (`NewTemplate`). The Pool, JDC, and Mining Devices identify work by `job_id` on Mining (`NewMiningJob` / `NewExtendedMiningJob`). Those identifiers live in different namespaces and are not linked by the base protocols. Stock TDP only returns `SubmitSolution` (network-valid blocks). A Template Provider therefore cannot, from Mining share traffic alone, prove which of **their** templates produced a given share.
 
-**`NewAssociatedMiningJob`** closes that gap. When the JDC begins mining a job derived from a TP template, it sends this message on the TDP connection. The message carries the original `template_id` plus everything the TP needs to interpret **and independently verify** later shares: the pool-bound `job_id`, merkle path, coinbase prefix and suffix, the pool-bound `extranonce_prefix` / `extranonce_size`, and the pool-bound `share_target`. The TP stores that state keyed by `template_id`. With it, every share record is a self-contained proof-of-work: the TP reconstructs the coinbase, derives the merkle root, assembles the header, and checks the hash against the target (§5.4). No trust in the JDC's counting is required.
+**`NewAssociatedMiningJob`** (JDC → TP) exists to close that gap. When the JDC derives pool-bound work from a TP template, it sends this message on the TDP connection, tying the original `template_id` to the pool-bound `job_id` and carrying the job parameters that shares will later be checked against: merkle path, coinbase prefix and suffix, the pool-bound `extranonce_prefix` / `extranonce_size`, and the pool-bound `share_target`. The TP stores this state keyed by `template_id`.
 
-**`SubmitSharesAssociated`** is the live share-mirroring path (full mode only). It carries `template_id` and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). It carries no explicit id: the TP derives the share hash (§6.2) while verifying the record.
+With the association in place, any share the JDC later hands over is a self-contained proof-of-work: the TP reconstructs the coinbase, derives the merkle root, assembles the header, and checks its hash against the target (§5.4). The same computed hash is the share's identifier (§6.2), so shares need no id field of their own.
 
-**Retrieval** is the batch path (both modes). The TP sends `RequestRecentShareHashes`; the JDC answers with `ShareHashes`, listing the share hashes of the most recent shares in its 10,000-share window. The TP takes the set difference against the shares it already holds, requests the missing records with `RequestShares`, and the JDC returns them in `Shares`.
+The association is the foundation for everything that follows — both delivery modes only move share records around; interpreting and verifying those records always goes through the stored association.
+
+### 2.2 Delivering shares: two modes
+
+The JDC always keeps a rolling window of the last 10,000 pool-bound shares, keyed by share hash (§6). What varies is how share records reach the TP. **`SetShareMirroringMode`** (TP → JDC) exists so the TP — the party paying the audit's bandwidth and doing its verification — can choose between two delivery modes after extension negotiation succeeds:
+
+**Lazy mode** — no unsolicited traffic; the TP pulls on its own schedule. Three message pairs exist for this:
+
+- **`RequestRecentShareHashes`** (TP → JDC) asks for the hashes of the most recent shares in the window; **`ShareHashes`** (JDC → TP) returns that list. This is deliberately hashes-only: it tells the TP *what exists* without resending records it may already hold.
+- **`RequestShares`** (TP → JDC) names the hashes the TP lacks after diffing the list against its own store; **`Shares`** (JDC → TP) returns those records — and reports any requested hash that has already aged out of the window, so the TP knows the difference between "not yet fetched" and "gone."
+
+**Full mode** — everything lazy mode has, plus a live stream. **`SubmitSharesAssociated`** (JDC → TP) exists for the TP that wants shares as they happen: the JDC sends one for every pool-bound share at submission time, carrying `template_id` and the proof fields (`nonce`, `ntime`, `version`, `extranonce`). The periodic hash pull remains and becomes a safety net: the TP diffs the pulled list against what arrived live and uses `RequestShares` to recover anything dropped in transit or missed before it connected.
+
+In both modes the TP detects missing shares the same way — a share is missing if and only if its hash appears in a `ShareHashes` reply and the TP holds no verified record for it. The modes differ only in whether records also arrive unsolicited.
 
 ---
 
